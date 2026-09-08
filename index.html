@@ -1047,10 +1047,20 @@ async function fetchEndpoint(letter, startISO, endISO){
   const base = document.getElementById('baseUrl').value.replace(/\/$/,'');
   const token = document.getElementById('tokenInput').value.trim();
   const url = `${base}/${toDDMMYYYY(startISO)}/${toDDMMYYYY(endISO)}/${letter}`;
-  const res = await fetch(url, {
-    headers: { 'Authorization': `Bearer ${token}` },
-    cache: 'no-store'
-  });
+
+  if(location.protocol === 'https:' && url.startsWith('http://')){
+    throw new Error(`Endpoint ${letter}: MIXED_CONTENT`);
+  }
+
+  let res;
+  try{
+    res = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${token}` },
+      cache: 'no-store'
+    });
+  } catch(err){
+    throw new Error(`Endpoint ${letter}: NETWORK_ERROR`);
+  }
   if(!res.ok){
     throw new Error(`Endpoint ${letter}: HTTP ${res.status}`);
   }
@@ -1113,8 +1123,28 @@ async function refreshAll(){
 
   if(errors.length){
     errorBanner.style.display = 'block';
-    errorBanner.innerHTML = '<b>No se pudieron cargar todos los datos:</b><br>' + errors.join('<br>') +
-      '<br><br>Si el error menciona "Failed to fetch" o similar, probablemente el API no tiene habilitado CORS para llamadas desde el navegador — pídele al backend que agregue el header <code>Access-Control-Allow-Origin</code>, o consume este dashboard desde un proxy que sí lo permita.';
+    const hasMixedContent = errors.some(e => e.includes('MIXED_CONTENT'));
+    const hasNetworkError = errors.some(e => e.includes('NETWORK_ERROR'));
+    let diagnostico;
+    if(hasMixedContent){
+      diagnostico = `<b>Causa detectada: contenido mixto (HTTPS → HTTP).</b> Esta página se está viendo por HTTPS
+        (por ejemplo, dentro de la vista previa de Claude), pero el API es HTTP (<code>${document.getElementById('baseUrl').value}</code>).
+        Los navegadores bloquean automáticamente ese tipo de llamada, sin importar si el API tiene CORS bien configurado.<br><br>
+        <b>Solución:</b> descarga este archivo .html a tu computadora y ábrelo directamente con doble clic (no lo veas dentro
+        del chat/preview), o pide que el API se publique con HTTPS.`;
+    } else if(hasNetworkError){
+      diagnostico = `<b>No se pudo establecer conexión con el servidor.</b> Antes de sospechar de CORS, revisa:<br>
+        1) Que tengas conexión a la red/VPN donde vive <code>${document.getElementById('baseUrl').value}</code>.<br>
+        2) Que el dominio y el puerto estén escritos correctamente.<br>
+        3) Abre las herramientas de desarrollador del navegador (F12 → pestaña "Console" o "Network") y revisa el mensaje
+        exacto en rojo — dirá si es CORS, DNS, conexión rechazada, certificado inválido, etc.<br><br>
+        Si el mensaje en consola dice específicamente <i>"blocked by CORS policy"</i>, entonces sí es el backend el que
+        necesita agregar el header <code>Access-Control-Allow-Origin</code>.`;
+    } else {
+      diagnostico = `Revisa el detalle de cada endpoint arriba. Si ves códigos HTTP (401, 403, 404, 500), el problema
+        es del lado del API (token vencido, ruta incorrecta, error del servidor), no del navegador.`;
+    }
+    errorBanner.innerHTML = `<b>No se pudieron cargar todos los datos:</b><br>${errors.join('<br>')}<br><br>${diagnostico}`;
   }
 
   const anySuccess = results.some(r => r.status === 'fulfilled');
